@@ -191,6 +191,10 @@ data class PlaylistEntry(
     val uploader: String? = null,
     val channel: String? = null,
     val thumbnails: List<Thumbnail>? = emptyList(),
+    val entries: List<PlaylistEntry>? = null,
+    @SerialName("webpage_url") val webpageUrl: String? = null,
+    @SerialName("playlist_index") val playlistIndex: Int? = null,
+    val sourcePlaylistUrl: String? = null,
 )
 
 @Serializable

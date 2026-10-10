@@ -2,6 +2,7 @@ package com.junkfood.seal.ui.page.downloadv2.configure
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.junkfood.seal.App
 import com.junkfood.seal.database.objects.CommandTemplate
 import com.junkfood.seal.download.DownloaderV2
 import com.junkfood.seal.download.Task
@@ -9,6 +10,8 @@ import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PlaylistResult
 import com.junkfood.seal.util.VideoInfo
 import com.yausername.youtubedl_android.YoutubeDL
+import java.util.UUID
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,15 +117,18 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
 
     private fun fetchPlaylist(action: Action.FetchPlaylist) {
         val (url, preferences) = action
+        val taskKey = "FetchPlaylist_${UUID.randomUUID()}"
 
         val job =
-            viewModelScope.launch(Dispatchers.IO) {
+            viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 DownloadUtil.getPlaylistOrVideoInfo(
                         playlistURL = url,
                         downloadPreferences = preferences,
+                        taskKey = taskKey,
                     )
                     .onSuccess { info ->
                         withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.InputUrl }
                             when (info) {
                                 is PlaylistResult -> {
                                     mSelectionStateFlow.update {
@@ -140,24 +146,31 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                         }
                     }
                     .onFailure { th ->
-                        mSheetStateFlow.update { SheetState.Error(action = action, throwable = th) }
+                        withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update {
+                                SheetState.Error(action = action, throwable = th)
+                            }
+                        }
                     }
             }
-        mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchPlaylist_$url", job = job) }
+        mSheetStateFlow.update { SheetState.Loading(taskKey = taskKey, job = job) }
+        job.start()
     }
 
     private fun fetchFormat(action: Action.FetchFormats) {
         val (url, audioOnly, preferences) = action
+        val taskKey = "FetchFormat_${UUID.randomUUID()}"
 
         val job =
-            viewModelScope.launch(Dispatchers.IO) {
+            viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 DownloadUtil.fetchVideoInfoFromUrl(
                         url = url,
                         preferences = preferences.copy(extractAudio = audioOnly),
-                        taskKey = "FetchFormat_$url",
+                        taskKey = taskKey,
                     )
                     .onSuccess { info ->
                         withContext(Dispatchers.Main) {
+                            mSheetStateFlow.update { SheetState.InputUrl }
                             mSelectionStateFlow.update {
                                 SelectionState.FormatSelection(info = info)
                             }
@@ -171,7 +184,8 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
                     }
             }
 
-        mSheetStateFlow.update { SheetState.Loading(taskKey = "FetchFormat_$url", job = job) }
+        mSheetStateFlow.update { SheetState.Loading(taskKey = taskKey, job = job) }
+        job.start()
     }
 
     private fun downloadWithPreset(
@@ -220,11 +234,11 @@ class DownloadDialogViewModel(private val downloader: DownloaderV2) : ViewModel(
     private fun cancel(): Boolean {
         return when (val state = sheetState) {
             is SheetState.Loading -> {
-                val res = YoutubeDL.destroyProcessById(id = state.taskKey)
-                if (res) {
-                    state.job.cancel()
+                state.job.cancel()
+                App.applicationScope.launch(Dispatchers.IO) {
+                    YoutubeDL.destroyProcessById(id = state.taskKey)
                 }
-                return res
+                true
             }
             else -> false
         }

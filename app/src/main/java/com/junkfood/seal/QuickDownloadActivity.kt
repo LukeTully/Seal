@@ -32,14 +32,15 @@ import com.junkfood.seal.util.DownloadUtil
 import com.junkfood.seal.util.PreferenceUtil
 import com.junkfood.seal.util.matchUrlFromSharedText
 import com.junkfood.seal.util.setLanguage
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.koin.androidx.viewmodel.ext.android.getViewModel
+import org.koin.androidx.viewmodel.ext.android.viewModel
 
 private const val TAG = "QuickDownloadActivity"
+private const val SHARED_URL = "shared_url"
 
 class QuickDownloadActivity : ComponentActivity() {
     private var sharedUrlCached: String = ""
+    private val dialogViewModel: DownloadDialogViewModel by viewModel()
 
     private fun Intent.getSharedURL(): String? {
         val intent = this
@@ -65,10 +66,12 @@ class QuickDownloadActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class, ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        intent.getSharedURL()?.let { sharedUrlCached = it }
+        sharedUrlCached =
+            savedInstanceState?.getString(SHARED_URL) ?: intent.getSharedURL().orEmpty()
 
         if (sharedUrlCached.isEmpty()) {
             finish()
+            return
         }
 
         App.startService()
@@ -81,19 +84,19 @@ class QuickDownloadActivity : ComponentActivity() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
             )
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-            } else {
-                setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT)
-            }
         }
 
         if (Build.VERSION.SDK_INT < 33) {
             runBlocking { setLanguage(PreferenceUtil.getLocaleFromPreference()) }
         }
 
-        val viewModel: DownloadDialogViewModel = getViewModel()
-        viewModel.postAction(Action.ShowSheet(listOf(sharedUrlCached)))
+        val viewModel = dialogViewModel
+        if (
+            savedInstanceState == null ||
+                viewModel.sheetStateFlow.value == DownloadDialogViewModel.SheetState.InputUrl
+        ) {
+            viewModel.postAction(Action.ShowSheet(listOf(sharedUrlCached)))
+        }
 
         setContent {
             SettingsProvider(calculateWindowSizeClass(this).widthSizeClass) {
@@ -120,13 +123,11 @@ class QuickDownloadActivity : ComponentActivity() {
                         if (sheetValue == DownloadDialogViewModel.SheetValue.Expanded) {
                             showDialog = true
                         } else if (sheetValue == DownloadDialogViewModel.SheetValue.Hidden) {
-                            launch { sheetState.hide() }
-                                .invokeOnCompletion {
-                                    showDialog = false
-                                    if (selectionState == SelectionState.Idle) {
-                                        this@QuickDownloadActivity.finish()
-                                    }
-                                }
+                            sheetState.hide()
+                            showDialog = false
+                            if (selectionState == SelectionState.Idle) {
+                                this@QuickDownloadActivity.finish()
+                            }
                         }
                     }
 
@@ -164,6 +165,22 @@ class QuickDownloadActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString(SHARED_URL, sharedUrlCached)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getSharedURL()?.let { url ->
+            sharedUrlCached = url
+            dialogViewModel.postAction(Action.Cancel)
+            dialogViewModel.postAction(Action.Reset)
+            dialogViewModel.postAction(Action.ShowSheet(listOf(url)))
         }
     }
 }

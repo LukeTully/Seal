@@ -38,11 +38,11 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.util.Locale
 
 object DownloadUtil {
 
@@ -87,6 +87,7 @@ object DownloadUtil {
     fun getPlaylistOrVideoInfo(
         playlistURL: String,
         downloadPreferences: DownloadPreferences = DownloadPreferences.createFromPreferences(),
+        taskKey: String = playlistURL,
     ): Result<YoutubeDLInfo> =
         YoutubeDL.runCatching {
             ToastUtil.makeToastSuspend(context.getString(R.string.fetching_playlist_info))
@@ -110,18 +111,18 @@ object DownloadUtil {
                         addOption("-4")
                     }
                     if (cookies) {
-                        enableCookies(userAgentString)
+                        enableCookies(userAgentString, playlistURL)
                     }
                     if (restrictFilenames) {
                         addOption("--restrict-filenames")
                     }
                 }
             }
-            execute(request, playlistURL).out.run {
+            execute(request, taskKey).out.run {
                 val playlistInfo = jsonFormat.decodeFromString<PlaylistResult>(this)
                 if (playlistInfo.type != "playlist") {
                     jsonFormat.decodeFromString<VideoInfo>(this)
-                } else playlistInfo
+                } else playlistInfo.flattenEntries()
             }
         }
 
@@ -155,7 +156,7 @@ object DownloadUtil {
                     }
                     applyFormatSorter(this@with, toFormatSorter())
                     if (cookies) {
-                        enableCookies(userAgentString)
+                        enableCookies(userAgentString, url)
                     }
                     if (proxy) {
                         enableProxy(proxyUrl)
@@ -173,13 +174,12 @@ object DownloadUtil {
                         }
                     }
                     if (playlistIndex != null) {
-                        addOption("--playlist-items", playlistIndex)
                         addOption("--dump-json")
                     } else {
                         addOption("--dump-single-json")
                     }
                     addOption("-R", "1")
-                    addOption("--no-playlist")
+                    selectPlaylistItem(playlistIndex)
                     addOption("--socket-timeout", "5")
                 }
             return getVideoInfo(request, taskKey)
@@ -358,11 +358,12 @@ object DownloadUtil {
         }
     }
 
-    private fun YoutubeDLRequest.enableCookies(userAgentString: String): YoutubeDLRequest =
+    private fun YoutubeDLRequest.enableCookies(
+        userAgentString: String,
+        url: String? = null,
+    ): YoutubeDLRequest =
         this.addOption("--cookies", context.getCookiesFile().absolutePath).apply {
-            if (userAgentString.isNotEmpty()) {
-                addOption("--add-header", "User-Agent:$userAgentString")
-            }
+            addCookieUserAgent(userAgentString, url)
         }
 
     private fun YoutubeDLRequest.enableProxy(proxyUrl: String): YoutubeDLRequest =
@@ -531,11 +532,12 @@ object DownloadUtil {
                     7 -> "+res"
                     else -> ""
                 }
-            val sorter = if (videoFormat == FORMAT_COMPATIBILITY) {
-                connectWithDelimiter(format, res, delimiter = ",")
-            } else {
-                connectWithDelimiter(res, format, delimiter = ",")
-            }
+            val sorter =
+                if (videoFormat == FORMAT_COMPATIBILITY) {
+                    connectWithDelimiter(format, res, delimiter = ",")
+                } else {
+                    connectWithDelimiter(res, format, delimiter = ",")
+                }
             return@run sorter
         }
 
@@ -686,7 +688,7 @@ object DownloadUtil {
                     addOption("--no-mtime")
                     //                addOption("-v")
                     if (cookies) {
-                        enableCookies(userAgentString)
+                        enableCookies(userAgentString, url)
                     }
                     if (restrictFilenames) {
                         addOption("--restrict-filenames")
@@ -718,15 +720,13 @@ object DownloadUtil {
                         addOption("-r", "${maxDownloadRate}K")
                     }
 
-                    if (playlistItem != 0 && downloadPlaylist) {
-                        addOption("--playlist-items", playlistItem)
+                    selectPlaylistItem(playlistItem.takeIf { it > 0 })
+                    if (playlistItem != 0) {
                         if (subdirectoryPlaylistTitle && !videoInfo.playlist.isNullOrEmpty()) {
                             outputBuilder.append(PLAYLIST_TITLE_SUBDIRECTORY_PREFIX)
                         }
                         //                    addOption("--compat-options",
                         // "no-youtube-unavailable-videos")
-                    } else {
-                        addOption("--no-playlist")
                     }
 
                     if (aria2c) {
@@ -793,8 +793,6 @@ object DownloadUtil {
                         }
 
                     addOption("-o", outputBuilder.append(output).toString())
-
-                    for (s in request.buildCommand()) Log.d(TAG, s)
                 }
                 .runCatching {
                     YoutubeDL.getInstance()
